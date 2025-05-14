@@ -1,12 +1,12 @@
 # app/services/binance/api_client.py
 
 import time
+import requests
+from binance.client import Client as _RawBinanceClient
 from typing import Any, Dict, List, Optional
 
-from ..binance_service import BinanceClient
 
-
-class BinanceAPIClient:
+class BinanceClient:
     """
     Low‐level wrapper for the Binance REST API.
     Uses the existing BinanceClient (signing, error‐handling) under the hood.
@@ -23,7 +23,7 @@ class BinanceAPIClient:
         :param api_secret: Binance API secret, or pulled from env
         :param timeout: request timeout in seconds
         """
-        self._client = BinanceClient(api_key=api_key, api_secret=api_secret, timeout=timeout)
+        self._client = _RawBinanceClient(self.api_key, self.api_secret)
 
     def get_deposit_history(
         self,

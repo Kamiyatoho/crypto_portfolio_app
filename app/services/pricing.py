@@ -1,7 +1,7 @@
 import time
 from typing import Optional
 
-from services.binance_client import BinanceClient
+from .binance.api_client import BinanceClient
 
 # Shared Binance client instance
 _client = BinanceClient()
