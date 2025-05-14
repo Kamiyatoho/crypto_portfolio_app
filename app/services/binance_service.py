@@ -1,4 +1,6 @@
 from .binance.api_client import BinanceAPIClient
+from .db      import SessionLocal, Deposit, Withdrawal, Trade
+from .sync_utils import get_last_sync, set_last_sync
 from .binance.portfolio import (
     get_current_portfolio_value,
     get_total_invested_capital,
@@ -25,6 +27,15 @@ from .binance.taxes import (
     calculate_estimated_tax,
     calculate_monthly_deposit_withdrawal
 )
+
+def upsert_records(db, model, data, pk_field):
+    instance = db.query(model).get(data[pk_field])
+    if instance:
+        for k,v in data.items():
+            setattr(instance, k, v)
+    else:
+        instance = model(**data)
+        db.add(instance)
 
 class BinanceService:
     def __init__(self, api_key, api_secret):
@@ -60,3 +71,30 @@ class BinanceService:
             "tax": calculate_estimated_tax(self.client, year),
             "monthly_data": calculate_monthly_deposit_withdrawal(self.client, year)
         }
+
+    def sync(self):
+            last_ts = get_last_sync()
+            # 1. récupérer deltas
+            deps   = self.client.get_deposit_history(startTime=last_ts)
+            wds    = self.client.get_withdraw_history(startTime=last_ts)
+            trades = self.client.get_my_trades(startTime=last_ts)
+
+            db = SessionLocal()
+            # 2. upsert
+            for d in deps:
+                upsert_records(db, Deposit,   {"txId": d["txId"], "asset": d["asset"], "amount": float(d["amount"]), "time": d["time"]}, "txId")
+            for w in wds:
+                upsert_records(db, Withdrawal,{"txId": w["txId"], "asset": w["asset"], "amount": float(w["amount"]), "time": w["time"]}, "txId")
+            for t in trades:
+                upsert_records(db, Trade,     {"orderId": t["orderId"], "symbol": t["symbol"], "price": float(t["price"]), "qty": float(t["qty"]), "time": t["time"]}, None)
+
+            db.commit()
+
+            # 3. maj timestamp
+            max_ts = max(
+                *(d["time"] for d in deps or [last_ts]),
+                *(w["time"] for w in wds  or [last_ts]),
+                *(t["time"] for t in trades or [last_ts])
+            )
+            set_last_sync(max_ts)
+            db.close()
