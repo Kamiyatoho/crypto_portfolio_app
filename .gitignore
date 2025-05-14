@@ -1,0 +1,51 @@
+# Environnement virtuel
+env/
+venv/
+
+# Variables d'environnement
+.env
+
+# Fichiers Python compilés
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Cache de tests
+.pytest_cache/
+
+# Dossiers et fichiers IDE
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# MacOS
+.DS_Store
+
+# Logs
+*.log
+
+# Fichiers temporaires
+*.tmp
+*.swp
+
+# Structure perso (non nécessaire au repo)
+structure.txt
+
+# Conteneurs / images Docker éventuels
+*.container
+*.image
+*.tar
+
+# Coverage reports
+htmlcov/
+.coverage
+
+# Distribution / build
+build/
+dist/
+*.egg-info/
+
+# Data
+Data/
