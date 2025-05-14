@@ -1,28 +1,24 @@
+from dotenv import load_dotenv
 import os
-from flask import Flask
-from app.services.db import init_db
-from app.routes.dashboard_routes import bp as dashboard_bp
 
-def create_app():
-    # 1. Initialize local database/tables
-    init_db()
+# Charger les variables d'environnement depuis le fichier .env
+load_dotenv()
 
-    # 2. Create Flask application
-    app = Flask(__name__)
+# Importer l'usine à application
+from app import create_app
+# Importer le blueprint Binance (au cas où create_app ne l'enregistre pas automatiquement)
+from app.routes.binance_routes import bp as binance_bp
 
-    # 3. Load configuration (e.g. DATABASE_URL, BINANCE_API_KEY/SECRET, etc.)
-    #    You can define defaults in config.py and override via env-vars.
-    app.config.from_object("config")
-
-    # 4. Register your dashboard blueprint
-    app.register_blueprint(dashboard_bp)
-
-    return app
-
+# Créer l'application
 app = create_app()
 
+# Enregistrer le blueprint Binance sous le préfixe /api/binance
+app.register_blueprint(binance_bp, url_prefix="/api/binance")
+
 if __name__ == "__main__":
-    # Debug on by default; bind to localhost:5000 (or override via PORT env-var)
-    host = os.getenv("HOST", "127.0.0.1")
+    # Mode debug si FLASK_DEBUG est défini à true dans l'environnement
+    debug = os.getenv("FLASK_DEBUG", "true").lower() in ("1", "true", "yes")
+    # Port configurable via la variable d'environnement PORT
     port = int(os.getenv("PORT", 5000))
-    app.run(debug=True, host=host, port=port)
+    # Lancer le serveur sur toutes les interfaces
+    app.run(host="0.0.0.0", port=port, debug=debug)
