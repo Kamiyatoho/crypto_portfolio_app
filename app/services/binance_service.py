@@ -1,100 +1,102 @@
-from .binance.api_client import BinanceAPIClient
-from .db      import SessionLocal, Deposit, Withdrawal, Trade
+from .db import SessionLocal
 from .sync_utils import get_last_sync, set_last_sync
-from .binance.portfolio import (
-    get_current_portfolio_value,
-    get_total_invested_capital,
-    get_realized_pl,
-    get_unrealized_pl,
-    get_usdc_balance
-)
-from .binance.positions import get_open_positions, get_closed_positions
-from .binance.transactions import (
-    get_deposit_history,
-    get_withdrawal_history,
-    get_trade_history,
-    get_conversion_history
-)
-from .binance.performance import (
-    get_portfolio_distribution,
-    get_average_invested_distribution,
-    get_performance_metrics
-)
-from .binance.taxes import (
-    calculate_yearly_deposits,
-    calculate_yearly_withdrawals,
-    calculate_current_portfolio_value,
-    calculate_estimated_tax,
-    calculate_monthly_deposit_withdrawal
-)
+from .binance.api_client import BinanceClient
+from .binance.portfolio import PortfolioCalculator
+from .binance.transaction import TransactionService
+from .binance.position import PositionService
+from .binance.performance import PerformanceService
+from .binance.taxes import TaxService
 
-def upsert_records(db, model, data, pk_field):
-    instance = db.query(model).get(data[pk_field])
-    if instance:
-        for k,v in data.items():
-            setattr(instance, k, v)
-    else:
-        instance = model(**data)
-        db.add(instance)
 
 class BinanceService:
-    def __init__(self, api_key, api_secret):
-        self.client = BinanceAPIClient(api_key, api_secret)
+    """
+    High-level wrapper for Binance portfolio operations:
+    - Incremental sync of deposits, withdrawals, and trades
+    - Portfolio summary (balances, P/L)
+    - Performance metrics
+    - Tax reporting
+    """
 
-    def get_dashboard_data(self):
+    def __init__(self, api_key=None, api_secret=None, db_url=None):
+        # Initialize Binance REST client
+        self.client = BinanceClient(api_key=api_key, api_secret=api_secret)
+        # Prepare database session
+        self.db = SessionLocal()
+        # Initialize sub-services
+        self.transactions = TransactionService(self.db, self.client)
+        self.positions = PositionService(self.db, self.client)
+        self.portfolio = PortfolioCalculator(self.db)
+        self.performance = PerformanceService(self.db)
+        self.taxes = TaxService(self.db)
+
+    def sync(self):  # pragma: no cover
+        """
+        Incremental synchronization of on-chain events:
+        - Deposits
+        - Withdrawals
+        - Trades
+
+        Uses the last sync timestamp to fetch only new records.
+        """
+        # Retrieve last sync timestamp
+        last_ts = get_last_sync()
+
+        # Fetch deltas from Binance
+        deposits = self.client.get_deposit_history(startTime=last_ts)
+        withdrawals = self.client.get_withdraw_history(startTime=last_ts)
+        trades = self.client.get_my_trades(startTime=last_ts)
+
+        # Upsert into database
+        self.transactions.upsert_deposits(deposits)
+        self.transactions.upsert_withdrawals(withdrawals)
+        self.transactions.upsert_trades(trades)
+
+        # Optionally upsert open positions
+        self.positions.upsert_current_positions()
+
+        # Compute new max timestamp for next sync
+        all_times = [last_ts]
+        all_times += [d.get('time', 0) for d in deposits or []]
+        all_times += [w.get('time', 0) for w in withdrawals or []]
+        all_times += [t.get('time', 0) for t in trades or []]
+        max_ts = max(all_times)
+
+        # Update sync marker
+        set_last_sync(max_ts)
+
+    def get_portfolio_data(self, year: int = None) -> dict:
+        """
+        Returns current portfolio summary:
+        - Balances per asset
+        - Total invested capital
+        - Current market value
+        - Unrealized P/L
+
+        :param year: filter deposits/trades by year for invested capital
+        """
+        balances = self.portfolio.compute_balances()
+        invested = self.portfolio.calculate_invested(year=year)
+        current_value = self.portfolio.calculate_current_value()
+        pl = current_value - invested
+
         return {
-            "valeur_actuelle": get_current_portfolio_value(self.client),
-            "capital_investi": get_total_invested_capital(self.client),
-            "pl_realise": get_realized_pl(self.client),
-            "pl_latent": get_unrealized_pl(self.client),
-            "solde_usdc": get_usdc_balance(self.client),
-            "open_positions": get_open_positions(self.client),
-            "closed_positions": get_closed_positions(self.client),
-            "distribution_actuelle": get_portfolio_distribution(self.client),
-            "distribution_investie": get_average_invested_distribution(self.client),
-            "performance": get_performance_metrics(self.client),
+            "balances": balances,
+            "invested": invested,
+            "current_value": current_value,
+            "profit_loss": pl,
         }
 
-    def get_transaction_data(self):
-        return {
-            "deposits": get_deposit_history(self.client),
-            "withdrawals": get_withdrawal_history(self.client),
-            "trades": get_trade_history(self.client),
-            "conversions": get_conversion_history(self.client),
-        }
+    def get_performance_data(self, start_date=None, end_date=None) -> dict:
+        """
+        Compute performance metrics over a time range:
+        - Returns series (daily, weekly, monthly)
+        - Max drawdown, CAGR, sharpe ratio, etc.
+        """
+        return self.performance.compute_metrics(start_date=start_date, end_date=end_date)
 
-    def get_tax_data(self, year):
-        return {
-            "totalDeposit": calculate_yearly_deposits(self.client, year),
-            "withdrawals": calculate_yearly_withdrawals(self.client, year),
-            "currentValue": calculate_current_portfolio_value(self.client),
-            "tax": calculate_estimated_tax(self.client, year),
-            "monthly_data": calculate_monthly_deposit_withdrawal(self.client, year)
-        }
-
-    def sync(self):
-            last_ts = get_last_sync()
-            # 1. récupérer deltas
-            deps   = self.client.get_deposit_history(startTime=last_ts)
-            wds    = self.client.get_withdraw_history(startTime=last_ts)
-            trades = self.client.get_my_trades(startTime=last_ts)
-
-            db = SessionLocal()
-            # 2. upsert
-            for d in deps:
-                upsert_records(db, Deposit,   {"txId": d["txId"], "asset": d["asset"], "amount": float(d["amount"]), "time": d["time"]}, "txId")
-            for w in wds:
-                upsert_records(db, Withdrawal,{"txId": w["txId"], "asset": w["asset"], "amount": float(w["amount"]), "time": w["time"]}, "txId")
-            for t in trades:
-                upsert_records(db, Trade,     {"orderId": t["orderId"], "symbol": t["symbol"], "price": float(t["price"]), "qty": float(t["qty"]), "time": t["time"]}, None)
-
-            db.commit()
-
-            # 3. maj timestamp
-            max_ts = max(
-                *(d["time"] for d in deps or [last_ts]),
-                *(w["time"] for w in wds  or [last_ts]),
-                *(t["time"] for t in trades or [last_ts])
-            )
-            set_last_sync(max_ts)
-            db.close()
+    def get_tax_report(self, year: int) -> dict:
+        """
+        Generates a tax report for the given fiscal year.
+        Includes realized gains/losses and taxable amount per French regulations.
+        """
+        return self.taxes.generate_report(year)
